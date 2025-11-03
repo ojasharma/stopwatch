@@ -39,6 +39,9 @@ const TimeTracker = () => {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    // Load sessions from DB (with localStorage fallback) when component mounts
+    loadSessions();
+
     const savedMode = localStorage.getItem('trackerMode') as Mode | null;
     const savedStartTime = localStorage.getItem('startTime');
     const savedTimerDuration = localStorage.getItem('timerDuration');
@@ -65,26 +68,61 @@ const TimeTracker = () => {
         setTimerRemaining(remaining);
       }
     }
-
-    loadSessions();
     // run only on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // NEW: Updated to fetch from DB and fall back to localStorage
   const loadSessions = async () => {
-    const saved = localStorage.getItem('allSessions');
-    if (saved) {
-      try {
-        setSessions(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse sessions', e);
+    try {
+      const res = await fetch('/api/sessions');
+      if (!res.ok) {
+        throw new Error('Server responded with an error');
+      }
+      const data = await res.json();
+      if (data.length > 0) {
+        setSessions(data);
+        // Sync localStorage with the DB's state
+        localStorage.setItem('allSessions', JSON.stringify(data));
+        console.log('Loaded sessions from DB');
+      }
+    } catch (e) {
+      console.error('Failed to fetch sessions from DB, loading from localStorage.', e);
+      // Fallback to localStorage if DB fetch fails
+      const saved = localStorage.getItem('allSessions');
+      if (saved) {
+        try {
+          setSessions(JSON.parse(saved));
+        } catch (parseError) {
+          console.error('Failed to parse sessions from localStorage', parseError);
+        }
       }
     }
   };
 
-  const saveSessions = (newSessions: Session[]) => {
+  // NEW: Updated to save to DB AND localStorage
+  const saveSessions = async (newSessions: Session[]) => {
+    // Update local state and localStorage immediately for responsiveness
     setSessions(newSessions);
     localStorage.setItem('allSessions', JSON.stringify(newSessions));
+  
+    // Asynchronously save to MongoDB
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(newSessions),
+      });
+      if (!res.ok) {
+        throw new Error('Failed to sync to DB');
+      }
+      console.log('Successfully synced sessions to DB');
+    } catch (e) {
+      console.error('Failed to sync sessions to DB', e);
+      // You could add logic here to retry or notify the user
+    }
   };
 
   // memoize handleStop so we can reference it safely in useEffect
@@ -103,7 +141,7 @@ const TimeTracker = () => {
     };
 
     const newSessions = [...sessions, session];
-    saveSessions(newSessions);
+    saveSessions(newSessions); // This will now save to state, localStorage, AND DB
 
     setIsRunning(false);
     setStartTime(null);
